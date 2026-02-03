@@ -11,13 +11,12 @@ from scipy.spatial.distance import cdist
 
 
 app = Flask(__name__)
-CORS(app)
-
+CORS(app, resources={ r".*": {"origins": "*"}})
 # ======================================================
 # Configuración de extractores
 # ======================================================
-EXTRACTORS = ["hu", "sift", "hog", "cnn"]
-
+EXTRACTORS = ["hu", "sift","zernike" ,"hog", "cnn"]
+#EXTRACTORS = ["cnn"]
 K = 4
 MAX_CLUSTER_SIZES = [300, 306, 405, 300]
 seed = 42
@@ -32,6 +31,7 @@ clusterings = {
 
     # dim dinámica → se inicializa luego
     "hog": None,
+    "zernike": None,
     "cnn": None
 }
 
@@ -191,6 +191,7 @@ def reset_backend():
         "hu": OnlineKMeansSizeConstrained(k=K, dim=7, max_sizes=MAX_CLUSTER_SIZES, init_buffer_size=5 * K, random_state=seed),
         "sift": OnlineKMeansSizeConstrained(k=K, dim=128, max_sizes=MAX_CLUSTER_SIZES, init_buffer_size=5 * K, random_state=seed),
         "hog": None,
+        "zernike": None,
         "cnn": None
     }
     return jsonify({"status": "success", "message": f"Backend reiniciado: K={K}, Tamaños={MAX_CLUSTER_SIZES}, Seed={seed}"})
