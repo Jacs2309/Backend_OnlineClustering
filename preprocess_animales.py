@@ -120,34 +120,26 @@ def remove_background(img_bgr: np.ndarray, cls_es: str):
 # =========================
 # PIPELINE COMPACTO FINAL
 # =========================
-def preprocess_image_compact(img_bgr: np.ndarray, cls_es: str) -> np.ndarray:
+def preprocess_image_compact(img_bgr: np.ndarray, cls_es: str):
     """
-    Pipeline compacto.
-    Entrada:
-        - img_bgr : np.ndarray (BGR)
-        - cls_es  : str ("perro", "mariposa", "elefante")
-
-    Salida:
-        - fg_gray : np.ndarray (uint8, 224x224)
+    Pipeline resumido.
+    Retorna únicamente:
+    - mask: máscara binaria (uint8, 0/255)
     """
-
     if img_bgr is None:
         raise ValueError("Imagen None")
 
     # Resize
     img = cv2.resize(img_bgr, TARGET_SIZE, interpolation=cv2.INTER_AREA)
 
-    # Denoising
+    # Denoise
     img = denoise_bgr(img, DENOISE_MODE)
 
     # Contraste
-    img, _, _ = apply_contrast_bgr(img)
+    proc_bgr, _, _ = apply_contrast_bgr(img)
 
     # Segmentación
-    fg_bgr, _ = remove_background(img, cls_es)
+    _, mask = remove_background(proc_bgr, cls_es)
 
-    # Escala de grises final
-    fg_gray = cv2.cvtColor(fg_bgr, cv2.COLOR_BGR2GRAY)
-
-    return fg_gray
+    return mask
 
