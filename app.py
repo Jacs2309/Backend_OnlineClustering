@@ -1,3 +1,4 @@
+import gc
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
@@ -70,7 +71,9 @@ def dunn_index(X, labels):
 def process_batch():
     if "images" not in request.files:
         return jsonify({"error": "No images provided"}), 400
-
+    
+    # Obtener el modo del frontend (por defecto 'hu')
+    mode = request.form.get("mode", "hu").lower()
     # Recibir listas de archivos y etiquetas
     files = request.files.getlist("images")
     labels = request.form.getlist("labels")
@@ -83,42 +86,44 @@ def process_batch():
         current_img_results = {"filename": file.filename}
         true_label = labels[i] if i < len(labels) else None
 
-        for mode in EXTRACTORS:
-            # Preprocesamiento inteligente
-            if mode in ["hu", "geom", "zernike"]:
-                if img_proc is None:
-                    img_proc = preprocess_image(img_raw)
-                img_to_use = img_proc
-            else:
-                img_to_use = img_raw
+        
+        # Preprocesamiento inteligente
+        if mode in ["hu", "geom", "zernike"]:
+            if img_proc is None:
+                img_proc = preprocess_image(img_raw)
+            img_to_use = img_proc
+        else:
+            img_to_use = img_raw
 
-            # 1. Extracción
-            features = extract_features(img_to_use, mode=mode)
-            dim = features.shape[0]
+        # 1. Extracción
+        features = extract_features(img_to_use, mode=mode)
+        dim = features.shape[0]
 
-            # 2. Lazy Init
-            if clusterings[mode] is None:
-                clusterings[mode] = OnlineKMeansSizeConstrained(
-                    k=K, dim=dim, max_sizes=MAX_CLUSTER_SIZES,
-                    init_buffer_size=10 * K, random_state=seed
-                )
+        # 2. Lazy Init
+        if clusterings[mode] is None:
+            clusterings[mode] = OnlineKMeansSizeConstrained(
+                k=K, dim=dim, max_sizes=MAX_CLUSTER_SIZES,
+                init_buffer_size=10 * K, random_state=seed
+            )
 
-            # 3. Fit
-            cluster_id = clusterings[mode].partial_fit(features, true_label=true_label)
+        # 3. Fit
+        cluster_id = clusterings[mode].partial_fit(features, true_label=true_label)
 
-            # Formatear ID
-            if isinstance(cluster_id, list):
-                final_id = int(cluster_id[-1]) if len(cluster_id) > 0 else -1
-            elif cluster_id == "pending": final_id = -1
-            elif cluster_id is None: final_id = -2
-            else: final_id = int(cluster_id)
+        # Formatear ID
+        if isinstance(cluster_id, list):
+            final_id = int(cluster_id[-1]) if len(cluster_id) > 0 else -1
+        elif cluster_id == "pending": final_id = -1
+        elif cluster_id is None: final_id = -2
+        else: final_id = int(cluster_id)
 
-            current_img_results[mode] = {
-                "cluster": final_id,
-                "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
-            }
+        current_img_results[mode] = {
+            "cluster": final_id,
+            "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
+        }
         
         batch_results.append(current_img_results)
+        del img_raw
+        gc.collect()
 
     return jsonify({
         "status": "ok",
