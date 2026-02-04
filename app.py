@@ -62,6 +62,7 @@ def process_batch():
     if "images" not in request.files:
         return jsonify({"error": "No images provided"}), 400
     
+    tamaños_máximos = request.form.getlist("max_sizes")
     # Obtener el modo del frontend (por defecto 'hu')
     mode = request.form.get("mode", "hu").lower()
     # Recibir listas de archivos y etiquetas
@@ -75,7 +76,7 @@ def process_batch():
         test_img = np.zeros((224,224,3), dtype=np.uint8)
         test_feat = extract_features(test_img, mode=mode)
         clusterings[mode] = OnlineKMeansSizeConstrained(
-            k=K, dim=test_feat.shape[0], max_sizes=MAX_CLUSTER_SIZES,
+            k=K, dim=test_feat.shape[0], max_sizes=tamaños_máximos,
             init_buffer_size=5 * K, random_state=seed
         )
 
