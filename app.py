@@ -88,7 +88,7 @@ def process_batch():
             features = extract_features(img_gray, mode=mode)
         else:
             features = extract_features(img_raw, mode=mode)
-            
+
         cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
 
         # Formatear respuesta
@@ -105,7 +105,7 @@ def process_batch():
         })
         
         # Limpieza agresiva de RAM
-        del img_raw, img_to_use, features
+        del img_raw, features
     
     gc.collect()
     return jsonify({
