@@ -1,17 +1,19 @@
 import gc
+import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
 import cv2
 
 from preprocess import preprocess_image
-from features import extract_features
+from features import extract_features, preload_onnx_session
 from clustering import OnlineKMeansSizeConstrained
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, adjusted_mutual_info_score,silhouette_score
 from scipy.spatial.distance import cdist, pdist
 
 app = Flask(__name__)
 CORS(app, resources={ r".*": {"origins": "*"}})
+
 # ======================================================
 # Configuración de extractores
 # ======================================================
@@ -21,8 +23,10 @@ K = 4
 MAX_CLUSTER_SIZES = [300, 306, 405, 300]
 seed = 42
 
-
 clusterings = {ext: None for ext in EXTRACTORS}
+
+# Cache de métricas con timestamp
+METRICS_CACHE = {"timestamp": 0, "data": {}, "CACHE_TTL": 30}  # 30 segundos
 
 # ======================================================
 # Utils
@@ -53,6 +57,16 @@ def dunn_index(X, labels, centroids):
             max_diameter = max(max_diameter, dists.max() * 2) # Estimación del diámetro
             
     return float(inter_dist / max_diameter) if max_diameter > 0 else 0
+
+# ======================================================
+# Endpoint Health Check (para inicializar modelo)
+# ======================================================
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Endpoint que precarga el modelo ONNX en startup"""
+    # Precarga del modelo en background
+    preload_onnx_session()
+    return jsonify({"status": "ready", "message": "Backend initializado"})
 
 # ======================================================
 # Endpoint principal
@@ -113,40 +127,59 @@ def process_batch():
         "results": batch_results # Ahora es una lista de resultados
     })
 # ======================================================
-# Endpoint Metricas
+# Endpoint Metricas (CON CACHE Y TIMEOUT)
 # ======================================================
 @app.route("/metrics", methods=["GET"])
 def get_metrics():
+    """Devuelve métricas del clustering con caché de 30 segundos"""
+    current_time = time.time()
+    
+    # Verificar caché
+    if (current_time - METRICS_CACHE["timestamp"] < METRICS_CACHE["CACHE_TTL"] 
+        and METRICS_CACHE["data"]):
+        return jsonify(METRICS_CACHE["data"])
+    
     evaluation = {}
     
     for mode in EXTRACTORS:
         model = clusterings[mode]
         # Evitar procesar si hay muy pocos datos (mínimo 2 clusters con datos)
         if model and len(model.labels_) > K and len(np.unique(model.labels_)) > 1:
-            X = np.array(model.features_list)
-            y_true = np.array(model.assigned_true_labels)
-            y_pred = np.array(model.labels_)
-            
-            # Muestreo si X es demasiado grande (Evita OOM en Render)
-            # Si hay más de 500 puntos, calculamos silueta con una muestra
-            if len(X) > 500:
-                indices = np.random.choice(len(X), 500, replace=False)
-                X_sub, y_sub = X[indices], y_pred[indices]
-                sil = silhouette_score(X_sub, y_sub)
-            else:
-                sil = silhouette_score(X, y_pred)
+            try:
+                X = np.array(model.features_list)
+                y_true = np.array(model.assigned_true_labels)
+                y_pred = np.array(model.labels_)
+                
+                # TIMEOUT: Si hay muchos datos, usar muestra más agresiva
+                if len(X) > 1000:
+                    indices = np.random.choice(len(X), 300, replace=False)
+                    X_sub, y_sub = X[indices], y_pred[indices]
+                    sil = silhouette_score(X_sub, y_sub)
+                elif len(X) > 500:
+                    indices = np.random.choice(len(X), 500, replace=False)
+                    X_sub, y_sub = X[indices], y_pred[indices]
+                    sil = silhouette_score(X_sub, y_sub)
+                else:
+                    sil = silhouette_score(X, y_pred)
 
-            evaluation[mode] = {
-                "ari": round(float(adjusted_rand_score(y_true, y_pred)), 4),
-                "nmi": round(float(normalized_mutual_info_score(y_true, y_pred)), 4),
-                "silhouette": round(float(sil), 4),
-                "dunn": round(dunn_index(X, y_pred, model.centroids), 4),
-                "samples": int(len(y_pred)),
-                "distribution": model.cluster_sizes.tolist()
-            }
+                evaluation[mode] = {
+                    "ari": round(float(adjusted_rand_score(y_true, y_pred)), 4),
+                    "nmi": round(float(normalized_mutual_info_score(y_true, y_pred)), 4),
+                    "silhouette": round(float(sil), 4),
+                    "dunn": round(dunn_index(X, y_pred, model.centroids), 4),
+                    "samples": int(len(y_pred)),
+                    "distribution": model.cluster_sizes.tolist()
+                }
+            except Exception as e:
+                print(f"[METRICS] Error calculando métricas para {mode}: {e}")
+                evaluation[mode] = {"error": f"Error en cálculo: {str(e)[:50]}"}
         else:
             evaluation[mode] = {"error": "Esperando más datos..."}
-            
+    
+    # Actualizar caché
+    METRICS_CACHE["timestamp"] = current_time
+    METRICS_CACHE["data"] = evaluation
+    
     return jsonify(evaluation)
 
 # ======================================================
@@ -160,11 +193,20 @@ def reset_backend():
     return jsonify({"status": "success"})
 
 if __name__ == "__main__":
-    # En local puerto 5001, en Render/HF se suele usar variable de entorno PORT
+    # Precarga del modelo ONNX en background thread en startup
+    import threading
     import os
+    
+    def preload_in_background():
+        """Precarga el modelo ONNX sin bloquear el servidor"""
+        print("[APP] Iniciando precarga de modelos en background...")
+        preload_onnx_session()
+    
+    # Iniciar precarga en thread separado
+    preload_thread = threading.Thread(target=preload_in_background, daemon=True)
+    preload_thread.start()
+    
+    # En local puerto 5001, en Render/HF se suele usar variable de entorno PORT
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port)
-# ======================================================
-# Main
-# ======================================================
 
