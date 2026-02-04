@@ -105,7 +105,7 @@ def process_batch():
         })
         
         # Limpieza agresiva de RAM
-        del img_raw, img_to_use, features
+        del img_raw, features
     
     gc.collect()
     return jsonify({
