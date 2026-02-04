@@ -8,8 +8,7 @@ from preprocess import preprocess_image
 from features import extract_features
 from clustering import OnlineKMeansSizeConstrained
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, adjusted_mutual_info_score,silhouette_score
-from scipy.spatial.distance import cdist
-
+from scipy.spatial.distance import cdist, pdist
 
 app = Flask(__name__)
 CORS(app, resources={ r".*": {"origins": "*"}})
@@ -22,53 +21,38 @@ K = 4
 MAX_CLUSTER_SIZES = [300, 306, 405, 300]
 seed = 42
 
-# ======================================================
-# Modelos de clustering (stateful)
-# ======================================================
-clusterings = {
-    # dim fija conocida
-    "hu": OnlineKMeansSizeConstrained(k=K, dim=7, max_sizes=MAX_CLUSTER_SIZES,init_buffer_size=5 * K),
-    "sift": OnlineKMeansSizeConstrained(k=K, dim=128, max_sizes=MAX_CLUSTER_SIZES,init_buffer_size=5 * K),
 
-    # dim dinámica → se inicializa luego
-    "hog": None,
-    "zernike": None,
-    "cnn": None
-}
+clusterings = {ext: None for ext in EXTRACTORS}
 
 # ======================================================
 # Utils
 # ======================================================
 def read_image(file):
-    # Asegurar que leemos desde el principio del archivo
-    file.seek(0)
-    img_bytes = np.frombuffer(file.read(), np.uint8)
-    if img_bytes.size == 0:
+    try:
+        file.seek(0)
+        img_bytes = np.frombuffer(file.read(), np.uint8)
+        if img_bytes.size == 0: return None
+        return cv2.imdecode(img_bytes, cv2.IMREAD_COLOR)
+    except:
         return None
-    
-    img = cv2.imdecode(img_bytes, cv2.IMREAD_COLOR)
-    return img # Puede ser None si OpenCV no reconoce el formato
 
-def dunn_index(X, labels):
+def dunn_index(X, labels, centroids):
     clusters = np.unique(labels)
     if len(clusters) < 2: return 0
     
-    # Mínima distancia entre clusters (Inter-cluster)
-    inter_cluster = np.inf
-    for i in clusters:
-        for j in clusters:
-            if i < j:
-                dist = cdist(X[labels == i], X[labels == j]).min()
-                inter_cluster = min(inter_cluster, dist)
-
-    # Máximo diámetro intra-cluster
-    intra_cluster = 0
-    for c in clusters:
-        points = X[labels == c]
-        if len(points) > 1:
-            intra_cluster = max(intra_cluster, cdist(points, points).max())
+    # 1. Inter-cluster: Distancia mínima entre centroides
+    inter_dist = pdist(centroids).min() if len(centroids) > 1 else 0
     
-    return inter_cluster / intra_cluster if intra_cluster > 0 else 0
+    # 2. Intra-cluster: Diámetro máximo (punto más alejado de su centroide)
+    max_diameter = 0
+    for i, c_idx in enumerate(clusters):
+        points = X[labels == c_idx]
+        if len(points) > 0:
+            # Distancia de cada punto a su centroide
+            dists = cdist(points, centroids[i:i+1])
+            max_diameter = max(max_diameter, dists.max() * 2) # Estimación del diámetro
+            
+    return float(inter_dist / max_diameter) if max_diameter > 0 else 0
 
 # ======================================================
 # Endpoint principal
@@ -86,51 +70,41 @@ def process_batch():
     
     batch_results = []
 
+    if clusterings.get(mode) is None:
+        # Probamos una extracción rápida para conocer la dimensión
+        test_img = np.zeros((224,224,3), dtype=np.uint8)
+        test_feat = extract_features(test_img, mode=mode)
+        clusterings[mode] = OnlineKMeansSizeConstrained(
+            k=K, dim=test_feat.shape[0], max_sizes=MAX_CLUSTER_SIZES,
+            init_buffer_size=5 * K, random_state=seed
+        )
+
     for i, file in enumerate(files):
         img_raw = read_image(file)
-        img_proc = None
-        if img_raw is None:
-            print(f"Error: No se pudo leer la imagen {file.filename}")
-            continue # Salta esta imagen y sigue con la siguiente
-        current_img_results = {"filename": file.filename}
-        true_label = labels[i] if i < len(labels) else None
+        if img_raw is None: continue
 
-        # Preprocesamiento inteligente
-        if mode in ["hu", "geom", "zernike"]:
-            if img_proc is None:
-                img_proc = preprocess_image(img_raw)
-            img_to_use = img_proc
-        else:
-            img_to_use = img_raw
-
-        # 1. Extracción
-        features = extract_features(img_to_use, mode=mode)
-        dim = features.shape[0]
-
-        # 2. Lazy Init
-        if clusterings[mode] is None:
-            clusterings[mode] = OnlineKMeansSizeConstrained(
-                k=K, dim=dim, max_sizes=MAX_CLUSTER_SIZES,
-                init_buffer_size=10 * K, random_state=seed
-            )
-
-        # 3. Fit
-        cluster_id = clusterings[mode].partial_fit(features, true_label=true_label)
-
-        # Formatear ID
-        if isinstance(cluster_id, list):
-            final_id = int(cluster_id[-1]) if len(cluster_id) > 0 else -1
-        elif cluster_id == "pending": final_id = -1
-        elif cluster_id is None: final_id = -2
-        else: final_id = int(cluster_id)
-
-        current_img_results[mode] = {
-            "cluster": final_id,
-            "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
-        }
+        # Decidir si usar imagen gris o color según extractor
+        img_to_use = preprocess_image(img_raw) if mode in ["hu", "zernike"] else img_raw
         
-        batch_results.append(current_img_results)
-        del img_raw
+        # Extraer y ajustar
+        features = extract_features(img_to_use, mode=mode)
+        cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
+
+        # Formatear respuesta
+        final_id = -1
+        if isinstance(cluster_id, (int, np.integer)): final_id = int(cluster_id)
+        elif isinstance(cluster_id, list) and len(cluster_id) > 0: final_id = int(cluster_id[-1])
+
+        batch_results.append({
+            "filename": file.filename,
+            mode: {
+                "cluster": final_id,
+                "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
+            }
+        })
+        
+        # Limpieza agresiva de RAM
+        del img_raw, img_to_use, features
         gc.collect()
 
     return jsonify({
@@ -146,35 +120,31 @@ def get_metrics():
     
     for mode in EXTRACTORS:
         model = clusterings[mode]
-        
-        # Solo evaluamos si el modelo ya procesó datos más allá del buffer
-        if model and len(model.labels_) > 0:
+        # Evitar procesar si hay muy pocos datos (mínimo 2 clusters con datos)
+        if model and len(model.labels_) > K and len(np.unique(model.labels_)) > 1:
             X = np.array(model.features_list)
             y_true = np.array(model.assigned_true_labels)
             y_pred = np.array(model.labels_)
             
-            # Métricas Externas
-            ari = adjusted_rand_score(y_true, y_pred)
-            nmi = normalized_mutual_info_score(y_true, y_pred)
-            ami = adjusted_mutual_info_score(y_true, y_pred)
-            # Métricas Internas
-            sil = silhouette_score(X, y_pred) if len(np.unique(y_pred)) > 1 else 0
-            dunn = dunn_index(X, y_pred)
+            # Muestreo si X es demasiado grande (Evita OOM en Render)
+            # Si hay más de 500 puntos, calculamos silueta con una muestra
+            if len(X) > 500:
+                indices = np.random.choice(len(X), 500, replace=False)
+                X_sub, y_sub = X[indices], y_pred[indices]
+                sil = silhouette_score(X_sub, y_sub)
+            else:
+                sil = silhouette_score(X, y_pred)
 
-            distribution = model.cluster_sizes.tolist()
-            
-            
             evaluation[mode] = {
-                "ari": round(float(ari), 4),
-                "nmi": round(float(nmi), 4),
-                "ami": round(float(ami), 4),
+                "ari": round(float(adjusted_rand_score(y_true, y_pred)), 4),
+                "nmi": round(float(normalized_mutual_info_score(y_true, y_pred)), 4),
                 "silhouette": round(float(sil), 4),
-                "dunn": round(float(dunn), 4),
+                "dunn": round(dunn_index(X, y_pred, model.centroids), 4),
                 "samples": int(len(y_pred)),
-                "distribution": distribution
+                "distribution": model.cluster_sizes.tolist()
             }
         else:
-            evaluation[mode] = {"error": "Sin datos suficientes"}
+            evaluation[mode] = {"error": "Esperando más datos..."}
             
     return jsonify(evaluation)
 
@@ -183,33 +153,18 @@ def get_metrics():
 # ======================================================
 @app.route("/reset", methods=["POST"])
 def reset_backend():
-    global clusterings, K, MAX_CLUSTER_SIZES, seed
-    
-    # Obtener parámetros del body si existen
-    data = request.get_json()
-    if data:
-        K = int(data.get("k", K))
-        new_max = data.get("max_size")
-        if new_max is not None:
-            if isinstance(new_max, list):
-                # Aseguramos que todos sean int
-                MAX_CLUSTER_SIZES = [int(x) for x in new_max]
-            else:
-                # Si llega un solo número, lo repetimos K veces
-                MAX_CLUSTER_SIZES = [int(new_max)] * K
-        seed = int(data.get("seed", seed))
+    global clusterings
+    clusterings = {ext: None for ext in EXTRACTORS}
+    gc.collect()
+    return jsonify({"status": "success"})
 
-    # Volvemos a inicializar el diccionario de modelos
-    clusterings = {
-        "hu": OnlineKMeansSizeConstrained(k=K, dim=7, max_sizes=MAX_CLUSTER_SIZES, init_buffer_size=5 * K, random_state=seed),
-        "sift": OnlineKMeansSizeConstrained(k=K, dim=128, max_sizes=MAX_CLUSTER_SIZES, init_buffer_size=5 * K, random_state=seed),
-        "hog": None,
-        "zernike": None,
-        "cnn": None
-    }
-    return jsonify({"status": "success", "message": f"Backend reiniciado: K={K}, Tamaños={MAX_CLUSTER_SIZES}, Seed={seed}"})
+if __name__ == "__main__":
+    # En local puerto 5001, en Render/HF se suele usar variable de entorno PORT
+    import os
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port)
 # ======================================================
 # Main
 # ======================================================
 if __name__ == "__main__":
-    app.run(port=5001, debug=True)
+    app.run(host="0.0.0.0", port=port)
