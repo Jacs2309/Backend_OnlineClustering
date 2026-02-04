@@ -83,6 +83,8 @@ def process_batch():
     labels = request.form.getlist("labels")
     
     batch_results = []
+    processed_count = 0
+    skipped_count = 0
 
     if clusterings.get(mode) is None:
         # Probamos una extracción rápida para conocer la dimensión
@@ -95,36 +97,53 @@ def process_batch():
 
     for i, file in enumerate(files):
         img_raw = read_image(file)
-        if img_raw is None: continue
+        if img_raw is None:
+            print(f"[PROCESS] ⚠️  Imagen inválida: {file.filename}")
+            skipped_count += 1
+            continue
 
-        if mode in ["hu", "zernike"]:
-            img_gray = preprocess_image(img_raw)
-            features = extract_features(img_gray, mode=mode)
-        else:
-            features = extract_features(img_raw, mode=mode)
+        try:
+            if mode in ["hu", "zernike"]:
+                img_gray = preprocess_image(img_raw)
+                features = extract_features(img_gray, mode=mode)
+            else:
+                features = extract_features(img_raw, mode=mode)
+                
+            cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
+
+            # Formatear respuesta
+            final_id = -1
+            if isinstance(cluster_id, (int, np.integer)): final_id = int(cluster_id)
+            elif isinstance(cluster_id, list) and len(cluster_id) > 0: final_id = int(cluster_id[-1])
+
+            batch_results.append({
+                "filename": file.filename,
+                mode: {
+                    "cluster": final_id,
+                    "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
+                }
+            })
             
-        cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
-
-        # Formatear respuesta
-        final_id = -1
-        if isinstance(cluster_id, (int, np.integer)): final_id = int(cluster_id)
-        elif isinstance(cluster_id, list) and len(cluster_id) > 0: final_id = int(cluster_id[-1])
-
-        batch_results.append({
-            "filename": file.filename,
-            mode: {
-                "cluster": final_id,
-                "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
-            }
-        })
-        
-        # Limpieza agresiva de RAM
-        del img_raw, features
+            processed_count += 1
+            print(f"[PROCESS] ✓ {file.filename} → Cluster {final_id}")
+            
+        except Exception as e:
+            print(f"[PROCESS] ❌ Error procesando {file.filename}: {str(e)}")
+            skipped_count += 1
+        finally:
+            # Limpieza agresiva de RAM
+            del img_raw, features
     
     gc.collect()
+    
+    print(f"[PROCESS] Resumen: {processed_count} procesadas, {skipped_count} saltadas, {len(files)} totales")
+    
     return jsonify({
         "status": "ok",
-        "results": batch_results # Ahora es una lista de resultados
+        "processed": processed_count,
+        "skipped": skipped_count,
+        "total_sent": len(files),
+        "results": batch_results
     })
 # ======================================================
 # Endpoint Metricas (CON CACHE Y TIMEOUT)
