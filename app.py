@@ -96,7 +96,9 @@ def process_batch():
         cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
 
         # Formatear respuesta
-        final_id = int(cluster_id) if isinstance(cluster_id, (int, np.integer)) else int(cluster_id[-1])
+        final_id = -1
+        if isinstance(cluster_id, (int, np.integer)): final_id = int(cluster_id)
+        elif isinstance(cluster_id, list) and len(cluster_id) > 0: final_id = int(cluster_id[-1])
 
         batch_results.append({
             "filename": file.filename,
