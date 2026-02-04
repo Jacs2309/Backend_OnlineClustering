@@ -17,10 +17,11 @@ CORS(app, resources={ r".*": {"origins": "*"}})
 # ======================================================
 EXTRACTORS = ["hu", "sift","zernike" ,"hog", "cnn"]
 #EXTRACTORS = ["cnn"]
-K = 4
-MAX_CLUSTER_SIZES = [300, 306, 405, 300]
-seed = 42
-
+CONFIG = {
+    "k": 4,
+    "max_sizes": [330, 330, 330, 330],
+    "seed": 42
+}
 
 clusterings = {ext: None for ext in EXTRACTORS}
 
@@ -59,12 +60,10 @@ def dunn_index(X, labels, centroids):
 # ======================================================
 @app.route("/process", methods=["POST"])
 def process_batch():
-    global K, MAX_CLUSTER_SIZES, seed
-
+    global CONFIG
+    
     if "images" not in request.files:
         return jsonify({"error": "No images provided"}), 400
-    
-    
     # Obtener el modo del frontend (por defecto 'hu')
     mode = request.form.get("mode", "hu").lower()
     # Recibir listas de archivos y etiquetas
@@ -78,9 +77,13 @@ def process_batch():
         # Probamos una extracción rápida para conocer la dimensión
         test_img = np.zeros((224,224,3), dtype=np.uint8)
         test_feat = extract_features(test_img, mode=mode)
+
         clusterings[mode] = OnlineKMeansSizeConstrained(
-            k=K, dim=test_feat.shape[0], max_sizes=MAX_CLUSTER_SIZES,
-            init_buffer_size=5 * K, random_state=seed
+            k=CONFIG["k"], 
+            dim=test_feat.shape[0], 
+            max_sizes=CONFIG["max_sizes"], # <--- APLICACIÓN DINÁMICA
+            init_buffer_size=5 * CONFIG["k"], 
+            random_state=CONFIG["seed"]
         )
 
     for i, file in enumerate(files):
@@ -93,25 +96,20 @@ def process_batch():
         cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
 
         # Formatear respuesta
-        final_id = -1
-        if isinstance(cluster_id, (int, np.integer)): final_id = int(cluster_id)
-        elif isinstance(cluster_id, list) and len(cluster_id) > 0: final_id = int(cluster_id[-1])
+        final_id = int(cluster_id) if isinstance(cluster_id, (int, np.integer)) else int(cluster_id[-1])
 
         batch_results.append({
             "filename": file.filename,
-            mode: {
-                "cluster": final_id,
-                "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
-            }
+            "cluster": final_id
         })
         
         # Limpieza agresiva de RAM
         del img_raw, features
-    
     gc.collect()
     return jsonify({
         "status": "ok",
-        "results": batch_results # Ahora es una lista de resultados
+        "results": batch_results,
+        "cluster_sizes": clusterings[mode].cluster_sizes.tolist()
     })
 # ======================================================
 # Endpoint Metricas
@@ -155,17 +153,17 @@ def get_metrics():
 # ======================================================
 @app.route("/reset", methods=["POST"])
 def reset_backend():
-    global clusterings, K, MAX_CLUSTER_SIZES, seed
+    global clusterings, CONFIG
     data = request.get_json()
     
     # Extraemos y actualizamos la configuración global
-    K = int(data.get("k", 4))
-    seed = int(data.get("seed", 42))
+    CONFIG["k"] = int(data.get("k", 4))
+    CONFIG["seed"] = int(data.get("seed", 42))
     
     # Recibimos la lista de tamaños dinámicos
     incoming_sizes = data.get("max_size")
-    if incoming_sizes and len(incoming_sizes) == K:
-        MAX_CLUSTER_SIZES = [int(s) for s in incoming_sizes]
+    if incoming_sizes and len(incoming_sizes) == CONFIG["k"]:
+        CONFIG["max_sizes"] = [int(s) for s in incoming_sizes]
     
     # Limpiamos los modelos para forzar la reinicialización con los nuevos tamaños
     clusterings = {ext: None for ext in EXTRACTORS}
