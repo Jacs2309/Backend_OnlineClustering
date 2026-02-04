@@ -63,6 +63,7 @@ def process_batch():
         return jsonify({"error": "No images provided"}), 400
     
     data = request.get_json()
+    tamaños_máximos = data.get("max_size")
     # Obtener el modo del frontend (por defecto 'hu')
     mode = request.form.get("mode", "hu").lower()
     # Recibir listas de archivos y etiquetas
