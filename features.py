@@ -9,17 +9,22 @@ from skimage.feature import hog
 # =========================
 # Cargamos la sesión de ONNX una sola vez globalmente
 # Asegúrate de que 'mobilenet_v2.onnx' esté en la misma carpeta
-try:
-    ORT_SESSION = ort.InferenceSession("backend/mobilenet_v2.onnx", providers=['CPUExecutionProvider'])
-except Exception as e:
-    print(f"Advertencia: No se pudo cargar el modelo ONNX: {e}")
-    ORT_SESSION = None
+ORT_SESSION = None
+
+def get_ort_session():
+    global ORT_SESSION
+    if ORT_SESSION is None:
+        print("Cargando modelo ONNX en memoria...")
+        try:
+            ORT_SESSION = ort.InferenceSession("mobilenet_v2.onnx", providers=['CPUExecutionProvider'])
+        except Exception as e:
+            print(f"Error cargando ONNX: {e}")
+    return ORT_SESSION
 
 def extract_cnn(img):
-    if ORT_SESSION is None:
-        print("Advertencia: La sesión ONNX no está disponible. Retornando vector cero.")
+    session = get_ort_session() # Solo carga el modelo si se llama a esta función
+    if session is None:
         return np.zeros(1280, dtype=np.float32)
-
     # 1. Ajuste de canales (RGB)
     if len(img.shape) == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)

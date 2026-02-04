@@ -40,8 +40,14 @@ clusterings = {
 # Utils
 # ======================================================
 def read_image(file):
+    # Asegurar que leemos desde el principio del archivo
+    file.seek(0)
     img_bytes = np.frombuffer(file.read(), np.uint8)
-    return cv2.imdecode(img_bytes, cv2.IMREAD_COLOR)
+    if img_bytes.size == 0:
+        return None
+    
+    img = cv2.imdecode(img_bytes, cv2.IMREAD_COLOR)
+    return img # Puede ser None si OpenCV no reconoce el formato
 
 def dunn_index(X, labels):
     clusters = np.unique(labels)
@@ -83,10 +89,12 @@ def process_batch():
     for i, file in enumerate(files):
         img_raw = read_image(file)
         img_proc = None
+        if img_raw is None:
+            print(f"Error: No se pudo leer la imagen {file.filename}")
+            continue # Salta esta imagen y sigue con la siguiente
         current_img_results = {"filename": file.filename}
         true_label = labels[i] if i < len(labels) else None
 
-        
         # Preprocesamiento inteligente
         if mode in ["hu", "geom", "zernike"]:
             if img_proc is None:
