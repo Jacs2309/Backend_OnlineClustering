@@ -3,40 +3,22 @@ import numpy as np
 import onnxruntime as ort
 import mahotas
 from skimage.feature import hog
-import threading
-import time
 
 # =========================
 # CONFIGURACIÓN ONNX (CNN)
 # =========================
-# Cargamos la sesión de ONNX una sola vez globalmente con precarga
+# Cargamos la sesión de ONNX una sola vez globalmente
+# Asegúrate de que 'mobilenet_v2.onnx' esté en la misma carpeta
 ORT_SESSION = None
-ORT_LOADED = False
-ORT_LOCK = threading.Lock()
-
-def preload_onnx_session():
-    """Precarga el modelo ONNX en background thread"""
-    global ORT_SESSION, ORT_LOADED
-    if ORT_LOADED:
-        return
-    
-    with ORT_LOCK:
-        if ORT_LOADED:  # Double-check locking
-            return
-        try:
-            print("[FEATURES] Precargando modelo ONNX MobileNetV2...")
-            start = time.time()
-            ORT_SESSION = ort.InferenceSession("mobilenet_v2.onnx", providers=['CPUExecutionProvider'])
-            ORT_LOADED = True
-            print(f"[FEATURES] Modelo cargado en {time.time() - start:.2f}s")
-        except Exception as e:
-            print(f"[FEATURES] Error precargando ONNX: {e}")
-            ORT_LOADED = False
 
 def get_ort_session():
-    global ORT_SESSION, ORT_LOADED
-    if not ORT_LOADED:
-        preload_onnx_session()
+    global ORT_SESSION
+    if ORT_SESSION is None:
+        print("Cargando modelo ONNX en memoria...")
+        try:
+            ORT_SESSION = ort.InferenceSession("mobilenet_v2.onnx", providers=['CPUExecutionProvider'])
+        except Exception as e:
+            print(f"Error cargando ONNX: {e}")
     return ORT_SESSION
 
 def extract_cnn(img):

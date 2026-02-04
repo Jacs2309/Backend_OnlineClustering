@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 
 from preprocess import preprocess_image
+from preprocess_animales import preprocess_image_compact
 from features import extract_features, preload_onnx_session
 from clustering import OnlineKMeansSizeConstrained
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, adjusted_mutual_info_score,silhouette_score
@@ -78,6 +79,8 @@ def process_batch():
     
     # Obtener el modo del frontend (por defecto 'hu')
     mode = request.form.get("mode", "hu").lower()
+    # Obtener el tipo de datos (tumores o animales)
+    data_type = request.form.get("dataType", "tumores").lower()
     # Recibir listas de archivos y etiquetas
     files = request.files.getlist("images")
     labels = request.form.getlist("labels")
@@ -98,13 +101,16 @@ def process_batch():
     for i, file in enumerate(files):
         img_raw = read_image(file)
         if img_raw is None:
-            print(f"[PROCESS] ⚠️  Imagen inválida: {file.filename}")
+            print(f"[PROCESS] Imagen inválida: {file.filename}")
             skipped_count += 1
             continue
 
         try:
             if mode in ["hu", "zernike"]:
-                img_gray = preprocess_image(img_raw)
+                if data_type == "animales":
+                    img_gray = preprocess_image_compact(img_raw, cls_es="generico")
+                else:
+                    img_gray = preprocess_image(img_raw)
                 features = extract_features(img_gray, mode=mode)
             else:
                 features = extract_features(img_raw, mode=mode)
@@ -128,7 +134,7 @@ def process_batch():
             print(f"[PROCESS] ✓ {file.filename} → Cluster {final_id}")
             
         except Exception as e:
-            print(f"[PROCESS] ❌ Error procesando {file.filename}: {str(e)}")
+            print(f"[PROCESS] Error procesando {file.filename}: {str(e)}")
             skipped_count += 1
         finally:
             # Limpieza agresiva de RAM
