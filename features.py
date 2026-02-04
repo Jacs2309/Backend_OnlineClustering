@@ -40,28 +40,42 @@ def get_ort_session():
     return ORT_SESSION
 
 def extract_cnn(img):
-    session = get_ort_session() # Solo carga el modelo si se llama a esta función
+    session = get_ort_session()  # Solo carga el modelo si se llama a esta función
     if session is None:
         return np.zeros(1280, dtype=np.float32)
-    # 1. Ajuste de canales (RGB)
+
+    # 1. Ajuste de canales: convertir a RGB
     if len(img.shape) == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     elif img.shape[2] == 4:
         img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-    
+    else:
+        # OpenCV carga BGR por defecto, convertir a RGB
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
     # 2. Redimensionar y Preprocesar (Escala MobileNet: [-1, 1])
     img_resized = cv2.resize(img, (224, 224)).astype(np.float32)
-    img_resized /= 127.5
-    img_resized -= 1.0
-    
-    # 3. Formato para ONNX (Batch, Height, Width, Channels)
-    x = np.expand_dims(img_resized, axis=0)
-    
-    # 4. Inferencia
-    input_name = ORT_SESSION.get_inputs()[0].name
-    features = ORT_SESSION.run(None, {input_name: x})
-    
-    return features[0].flatten().astype(np.float32)
+    img_resized = (img_resized / 127.5) - 1.0
+
+    # 3. Formato de batch
+    x = np.expand_dims(img_resized, axis=0).astype(np.float32)
+
+    # 4. Adaptar layout si el modelo espera NCHW (canales primero)
+    try:
+        input_meta = session.get_inputs()[0]
+        input_shape = input_meta.shape
+        input_name = input_meta.name
+        if isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
+            # Si la segunda dimensión es 3, el modelo espera (N, C, H, W)
+            if input_shape[1] == 3:
+                x = np.transpose(x, (0, 3, 1, 2)).astype(np.float32)
+    except Exception:
+        # Fallback: obtener nombre de input si algo falla
+        input_name = session.get_inputs()[0].name
+
+    # 5. Inferencia
+    outputs = session.run(None, {input_name: x})
+    return np.asarray(outputs[0]).flatten().astype(np.float32)
 
 # =========================
 # MOMENTOS DE ZERNIKE (Mahotas)
