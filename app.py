@@ -104,6 +104,7 @@ def process_batch():
     batch_results = []
     processed_count = 0
     skipped_count = 0
+    stopped_due_full = False
 
     # Inicializar o reinicializar el clustering para este modo si es necesario
     need_init = False
@@ -125,6 +126,19 @@ def process_batch():
         )
 
     for i, file in enumerate(files):
+        # Si el clustering está inicializado y todos los clusters alcanzaron su max_size, detener proceso
+        current_model = clusterings.get(mode)
+        if current_model is not None and getattr(current_model, 'initialized', False):
+            try:
+                full_mask = np.atleast_1d(current_model.cluster_sizes) >= np.atleast_1d(current_model.max_sizes)
+                if full_mask.all():
+                    print(f"[PROCESS] Todos los clusters para modo '{mode}' alcanzaron su tamaño máximo. Deteniendo proceso.")
+                    stopped_due_full = True
+                    break
+            except Exception:
+                # En caso de cualquier inconsistencia, no bloquear el procesamiento
+                pass
+
         img_raw = read_image(file)
         if img_raw is None:
             print(f"[PROCESS] Imagen inválida: {file.filename}")
@@ -170,15 +184,19 @@ def process_batch():
     
     print(f"[PROCESS] Resumen: {processed_count} procesadas, {skipped_count} saltadas, {len(files)} totales")
     
-    return jsonify({
+    response_payload = {
         "status": "ok",
         "processed": processed_count,
         "skipped": skipped_count,
         "total_sent": len(files),
         "results": batch_results
-    })
+    }
+    if stopped_due_full:
+        response_payload["stopped_due_full"] = True
+
+    return jsonify(response_payload)
 # ======================================================
-# Endpoint Metricas (CON CACHE Y TIMEOUT)
+# Endpoint Metricas 
 # ======================================================
 @app.route("/metrics", methods=["GET"])
 def get_metrics():
@@ -216,6 +234,7 @@ def get_metrics():
                 evaluation[mode] = {
                     "ari": round(float(adjusted_rand_score(y_true, y_pred)), 4),
                     "nmi": round(float(normalized_mutual_info_score(y_true, y_pred)), 4),
+                    "ami": round(float(adjusted_mutual_info_score(y_true, y_pred)), 4),
                     "silhouette": round(float(sil), 4),
                     "dunn": round(dunn_index(X, y_pred, model.centroids), 4),
                     "samples": int(len(y_pred)),
