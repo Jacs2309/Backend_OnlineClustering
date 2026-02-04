@@ -83,11 +83,12 @@ def process_batch():
         img_raw = read_image(file)
         if img_raw is None: continue
 
-        # Decidir si usar imagen gris o color según extractor
-        img_to_use = preprocess_image(img_raw) if mode in ["hu", "zernike"] else img_raw
-        
-        # Extraer y ajustar
-        features = extract_features(img_to_use, mode=mode)
+        if mode in ["hu", "zernike"]:
+            img_gray = preprocess_image(img_raw)
+            features = extract_features(img_gray, mode=mode)
+        else:
+            features = extract_features(img_raw, mode=mode)
+            
         cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
 
         # Formatear respuesta
@@ -105,8 +106,8 @@ def process_batch():
         
         # Limpieza agresiva de RAM
         del img_raw, img_to_use, features
-        gc.collect()
-
+    
+    gc.collect()
     return jsonify({
         "status": "ok",
         "results": batch_results # Ahora es una lista de resultados
