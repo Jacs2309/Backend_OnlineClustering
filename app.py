@@ -59,16 +59,19 @@ def dunn_index(X, labels, centroids):
 # ======================================================
 @app.route("/process", methods=["POST"])
 def process_batch():
+    global K, MAX_CLUSTER_SIZES, seed
+
     if "images" not in request.files:
         return jsonify({"error": "No images provided"}), 400
     
-    tamaños_máximos = request.form.getlist("max_size")
+    
     # Obtener el modo del frontend (por defecto 'hu')
     mode = request.form.get("mode", "hu").lower()
     # Recibir listas de archivos y etiquetas
     files = request.files.getlist("images")
     labels = request.form.getlist("labels")
-    
+    #tamaños_máximos = request.form.getlist("max_size")
+
     batch_results = []
 
     if clusterings.get(mode) is None:
@@ -76,7 +79,7 @@ def process_batch():
         test_img = np.zeros((224,224,3), dtype=np.uint8)
         test_feat = extract_features(test_img, mode=mode)
         clusterings[mode] = OnlineKMeansSizeConstrained(
-            k=K, dim=test_feat.shape[0], max_sizes=tamaños_máximos,
+            k=K, dim=test_feat.shape[0], max_sizes=MAX_CLUSTER_SIZES,
             init_buffer_size=5 * K, random_state=seed
         )
 
@@ -84,11 +87,8 @@ def process_batch():
         img_raw = read_image(file)
         if img_raw is None: continue
 
-        if mode in ["hu", "zernike"]:
-            img_gray = preprocess_image(img_raw)
-            features = extract_features(img_gray, mode=mode)
-        else:
-            features = extract_features(img_raw, mode=mode)
+        img_to_use = preprocess_image(img_raw) if mode in ["hu", "zernike"] else img_raw
+        features = extract_features(img_to_use, mode=mode)
 
         cluster_id = clusterings[mode].partial_fit(features, true_label=labels[i] if i < len(labels) else None)
 
@@ -155,7 +155,7 @@ def get_metrics():
 # ======================================================
 @app.route("/reset", methods=["POST"])
 def reset_backend():
-    global clusterings, k, MAX_CLUSTER_SIZES, seed
+    global clusterings, K, MAX_CLUSTER_SIZES, seed
     data = request.get_json()
     
     # Extraemos y actualizamos la configuración global
