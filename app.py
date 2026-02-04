@@ -81,6 +81,22 @@ def process_batch():
     mode = request.form.get("mode", "hu").lower()
     # Obtener el tipo de datos (tumores o animales)
     data_type = request.form.get("dataType", "tumores").lower()
+    # Recibir configuración de clustering (k y tamaños)
+    k_str = request.form.get("k")
+    try:
+        local_k = int(k_str) if k_str is not None and str(k_str).strip() != "" else K
+    except:
+        local_k = K
+
+    max_sizes_raw = request.form.get("maxSizes", "")
+    try:
+        if isinstance(max_sizes_raw, str) and max_sizes_raw.strip() != "":
+            local_max_sizes = [int(s) for s in max_sizes_raw.split(",") if s.strip() != ""]
+        else:
+            local_max_sizes = MAX_CLUSTER_SIZES
+    except:
+        local_max_sizes = MAX_CLUSTER_SIZES
+
     # Recibir listas de archivos y etiquetas
     files = request.files.getlist("images")
     labels = request.form.getlist("labels")
@@ -89,13 +105,23 @@ def process_batch():
     processed_count = 0
     skipped_count = 0
 
+    # Inicializar o reinicializar el clustering para este modo si es necesario
+    need_init = False
     if clusterings.get(mode) is None:
+        need_init = True
+    else:
+        # Reinicializar si la configuración cambió
+        existing = clusterings[mode]
+        if getattr(existing, 'k', None) != local_k or not np.array_equal(existing.max_sizes, np.atleast_1d(local_max_sizes)):
+            need_init = True
+
+    if need_init:
         # Probamos una extracción rápida para conocer la dimensión
         test_img = np.zeros((224,224,3), dtype=np.uint8)
         test_feat = extract_features(test_img, mode=mode)
         clusterings[mode] = OnlineKMeansSizeConstrained(
-            k=K, dim=test_feat.shape[0], max_sizes=MAX_CLUSTER_SIZES,
-            init_buffer_size=5 * K, random_state=seed
+            k=local_k, dim=test_feat.shape[0], max_sizes=local_max_sizes,
+            init_buffer_size=5 * local_k, random_state=seed
         )
 
     for i, file in enumerate(files):
@@ -169,7 +195,7 @@ def get_metrics():
     for mode in EXTRACTORS:
         model = clusterings[mode]
         # Evitar procesar si hay muy pocos datos (mínimo 2 clusters con datos)
-        if model and len(model.labels_) > K and len(np.unique(model.labels_)) > 1:
+        if model and len(model.labels_) > getattr(model, 'k', K) and len(np.unique(model.labels_)) > 1:
             try:
                 X = np.array(model.features_list)
                 y_true = np.array(model.assigned_true_labels)
