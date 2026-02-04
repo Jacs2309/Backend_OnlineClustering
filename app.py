@@ -123,7 +123,7 @@ def get_metrics():
     for mode in EXTRACTORS:
         model = clusterings[mode]
         # Evitar procesar si hay muy pocos datos (mínimo 2 clusters con datos)
-        if model and len(model.labels_) > K and len(np.unique(model.labels_)) > 1:
+        if model and len(model.labels_) > CONFIG["k"] and len(np.unique(model.labels_)) > 1:
             X = np.array(model.features_list)
             y_true = np.array(model.assigned_true_labels)
             y_pred = np.array(model.labels_)
