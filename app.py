@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import numpy as np
 import cv2
-
+#se agregan librerias necesarias 
 from preprocess import preprocess_image
 from preprocess_animales import preprocess_image_compact
 from features import extract_features, preload_onnx_session
