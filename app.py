@@ -184,12 +184,25 @@ def process_batch():
     
     print(f"[PROCESS] Resumen: {processed_count} procesadas, {skipped_count} saltadas, {len(files)} totales")
     
+    # Resumen agrupado por cluster (lista de filenames por cluster)
+    cluster_summary = {}
+    for r in batch_results:
+        fname = r.get("filename")
+        c_id = r.get(mode, {}).get("cluster", -1)
+        try:
+            if isinstance(c_id, (int, np.integer)) and c_id >= 0:
+                cluster_summary.setdefault(str(int(c_id)), []).append(fname)
+        except Exception:
+            # Ignorar valores inválidos
+            continue
+
     response_payload = {
         "status": "ok",
         "processed": processed_count,
         "skipped": skipped_count,
         "total_sent": len(files),
-        "results": batch_results
+        "results": batch_results,
+        "by_cluster": cluster_summary
     }
     if stopped_due_full:
         response_payload["stopped_due_full"] = True
